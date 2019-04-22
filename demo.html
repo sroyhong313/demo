@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.label {
+  fill: #000;
+  font: 12px sans-serif;
+  pointer-events: none;
+}
+
+.heading {
+  fill: #000;
+  font: 14px sans-serif;
+  pointer-events: none;
+  font-weight: bold;
+}
+
+.title {
+  fill: #000;
+  font: 24px sans-serif;
+  pointer-events: none;
+  font-weight: bold;
+}
+
+.counties {
+  fill: none;
+}
+
+.states {
+  fill: none;
+  stroke: #fff;
+  stroke-linejoin: round;
+}
+
+.tooltip{
+  padding: 5px;
+  background: #fff;
+  border: 1px solid #000;
+  font: 10px sans-serif;
+}
+
+</style>
+<body>
+  <div id="map"></div>
+</body>
+<script src="lib/d3.v5.min.js"></script>
+<script src="lib/topojson.v2.min.js"></script>
+<script src="lib/d3-tip.min.js"></script>
+<script>
+
+var spacing = 5,
+  gridSize = 20;
+  width = 1200;
+  height = 1000;
+
+var error = d3.map();
+    details = d3.map();
+    loc = d3.map()
+
+var path = d3.geoPath();
+
+var svg = d3.select("#map").append("svg")
+    .attr("width", width)
+    .attr("height", height)
+    .attr("transform", "translate(" + 0 + "," + 50 + ")");
+
+var promises = [
+  d3.json("us.json"),
+  d3.csv("all_results_error.csv", function(d) {
+    if (!error.has(d.State)) {
+      error.set(d.State, [])
+    }
+    var year = d.Year;
+    error.get(d.State).push({ [year]: d.RF_SE })
+  }),
+  d3.csv('county_poverty.csv', function(d) { loc.set(d.CensusId, d.State); })
+]
+
+Promise.all(promises).then(ready)
+
+function ready([us]) {
+  stateAverages = {}
+  error.each(function(object, state) {
+    var average = 0
+    for (yearError of object) {
+      value = parseFloat(Object.values(yearError)[0])
+      average += value
+    }
+    average /= 7
+    stateAverages[[state]] = average
+  })
+  var arr = Object.values(stateAverages)
+  var min = Math.min(...arr)
+  var max = Math.max(...arr)
+  var color = d3.scaleQuantile()
+    .domain(d3.range(min, max, (max - min) / 9))
+    .range(d3.schemeGreens[9]);
+
+  var tip = d3.tip()
+  .attr('class', 'tooltip')
+  .offset([0, 75])
+  .html(function(d) {
+    state = loc.get(d.id).toUpperCase()
+    return 'State: <b>' + state + '</b><br />' +
+    'Prediction Error: ' + Math.round(parseFloat(stateAverages[state]) * 10000) / 100 + '%'
+  });
+
+  svg.call(tip)
+  svg.append("g")
+    .attr("class", "counties")
+    .selectAll("path")
+    .data(topojson.feature(us, us.objects.counties).features)
+    .enter().append("path")
+    .attr("fill", function(d) {
+      state = loc.get(d.id).toUpperCase();
+      return color(stateAverages[state]);
+    })
+    .attr("d", path)
+    .on('mouseover', tip.show)
+    .on('click', function(d) {
+      d3.selectAll('g').filter('.svg2').html(null);
+      state = loc.get(d.id).toUpperCase();
+      var stateData = error.get(state);
+      drawLineGraph(stateData, state)
+    })
+    .on('mouseout', tip.hide)
+    .attr("width", width / 2);
+
+  svg.append("path")
+    .datum(topojson.mesh(us, us.objects.states, function(a, b) { return a !== b; }))
+    .attr("class", "states")
+    .attr("d", path);
+
+  var legend = svg.selectAll("g.legend")
+    .data(color.range().map(function(d) {
+      return d;
+    }))
+    .enter().append("g")
+    .attr("class", "legend");
+
+  legend.append("rect")
+    .attr("class", "legend")
+    .attr("x", 1050)
+    .attr("y", function(d,i){return (gridSize+spacing)*i+86})
+    .attr("width", gridSize)
+    .attr("height", gridSize)
+    .style("fill", function(d, i) { return d; })
+    .on('mouseover', tip.show)
+    .on('mouseout', tip.hide);
+
+  legend.append("text")
+    .attr("class", "label")
+    .attr("x", 1075)
+    .attr("y", function(d,i){return (gridSize+spacing)*i+100})
+    .text(function(d,i) {
+        if (i < 1) return "\u2264" + Math.round(color.domain()[i] * 10000) / 100 + '%';
+        else if (i === 8) return "\u2265" + Math.round(color.domain()[i] * 10000) / 100 + '%';
+        return Math.round(color.domain()[i] * 10000) / 100 + '%';
+    });
+
+}
+svg.append("text")
+    .attr("class", "heading")
+    .attr("x", 1050)
+    .attr("y", 75)
+    .text("Prediction Error")
+
+svg.append("text")
+  .attr("class", "title")
+  .attr("x", width/2-450)
+  .attr("y", 20)
+  .text("Prediction Errors in Total Expenditure By State From 2010-2016")
+
+var widthLine = 200;
+var heightLine = 200;
+
+var marginLine = 50;
+
+
+function drawLineGraph(data, state) {
+  var min = Math.pow(10,100)
+  var max = 0
+  for (obj of data) {
+    var value = parseFloat(Object.values(obj)[0]);
+    if (min > value) min = value;
+    if (max < value) max = value;
+  }
+
+  var xScale = d3.scaleLinear()
+    .domain([2010, 2016])
+    .range([0, widthLine]);
+
+  var yScale = d3.scaleLinear()
+    .domain([min, max])
+    .range([heightLine, 0]);
+
+  var line = d3.line()
+    .x(function(d, i) { return xScale(i + 2010); })
+    .y(function(d) {
+      errorVal = parseFloat(Object.values(d)[0]);
+      return yScale(errorVal);
+    })
+    .curve(d3.curveCardinal)
+
+  var svg2 = svg.selectAll("g.legend").append("svg")
+    .attr("width", width + (marginLine * 2))
+    .attr("height", height + (marginLine * 2))
+    .append("g")
+    .attr("transform", "translate(" + 950 + "," + 350 + ")")
+    .attr('class', 'svg2');
+
+  svg2.append("g")
+    .attr("class", "x axis")
+    .attr("transform", "translate(0," + heightLine + ")")
+    .call(d3.axisBottom(xScale)
+    .ticks(5));
+
+  svg2.append("text")
+    .attr("transform", "translate(" + (widthLine / 2) + " ," + -15 + ")")
+    .style("text-anchor", "middle")
+    .text('Changes in error for ' + state);
+
+  svg2.append("text")
+    .attr("transform", "translate(" + (widthLine / 2) + " ," + (heightLine + marginLine - 10) + ")")
+    .style("text-anchor", "middle")
+    .text("Year");
+
+  svg2.append("text")
+    .attr("transform", "rotate(-90)")
+    .attr("y", 0 - marginLine)
+    .attr("x", 0 - (heightLine / 2))
+    .attr("dy", "0.8em")
+    .style("text-anchor", "middle")
+    .text("Error");
+
+  svg2.append("g")
+      .attr("class", "y axis")
+      .call(d3.axisLeft(yScale));
+
+  svg2.append("path")
+      .datum(data)
+      .attr("class", "line")
+      .attr("d", line)
+      .attr("stroke", "steelblue")
+      .style('fill', 'none')
+      .call(transition)
+}
+function transition(path) {
+  path.transition()
+            .duration(2000)
+            .attrTween("stroke-dasharray", tweenDash);
+}
+function tweenDash() {
+        var l = this.getTotalLength(),
+            i = d3.interpolateString("0," + l, l + "," + l);
+        return function (t) { return i(t); };
+    }
+</script>
+</body>
+</html>
